@@ -1,0 +1,28 @@
+version: 2
+
+sources:
+  - name: bronze
+    database: CT_AKSHAT_AGARWAL_DB
+    schema: EXTERNAL
+    loaded_at_field: FILE_LAST_MODIFIED
+    freshness:
+      warn_after: {count: 1, period: day}
+      error_after: {count: 200, period: day}
+    tables:
+      - name: campaigns_data
+        identifier: CAMPAIGN_EXTERNAL
+      - name: customers_data
+        identifier: CUSTOMER_EXTERNAL
+      - name: employees_data
+        identifier: EMPLOYEE_EXTERNAL
+      - name: orders_data
+        identifier: ORDERS_EXTERNAL
+      - name: products_data
+        identifier: PRODUCT_EXTERNAL
+        freshness:
+          warn_after: {count: 7, period: day}
+          error_after: {count: 200, period: day}
+      - name: stores_data
+        identifier: STORE_EXTERNAL
+      - name: suppliers_data
+        identifier: SUPPLIER_EXTERNAL
