@@ -1,9 +1,9 @@
-{% snapshot CUSTOMERS_SNAPSHOT %}
+{% snapshot STORES_SNAPSHOT %}
 
 {{
     config(
         target_schema='SNAPSHOTS',
-        unique_key='customer_id',
+        unique_key='store_id',
         strategy='timestamp',
         updated_at='last_modified_date',
         invalidate_hard_deletes=True
@@ -13,32 +13,32 @@
 WITH flattened AS (
 
     SELECT
-        customer.value:customer_id::VARCHAR AS customer_id,
+        store.value:store_id::VARCHAR AS store_id,
 
         TRY_TO_TIMESTAMP_NTZ(
-            customer.value:last_modified_date::STRING
+            store.value:last_modified_date::STRING
         ) AS last_modified_date,
 
-        customer.value AS raw_customer_data,
+        store.value AS raw_store_data,
 
         b.SOURCE_FILE,
         b.LOADED_AT,
         b.BATCH_ID
 
-    FROM {{ ref('stg_bronze__customers_data') }} AS b,
+    FROM {{ ref('stg_bronze__stores_data') }} AS b,
 
     LATERAL FLATTEN(
-        INPUT => b.RAW_DATA:customers_data
-    ) AS customer
+        INPUT => b.RAW_DATA:stores_data
+    ) AS store
 
 ),
 
-latest_customer AS (
+latest_store AS (
 
     SELECT
-        customer_id,
+        store_id,
         last_modified_date,
-        raw_customer_data,
+        raw_store_data,
         SOURCE_FILE,
         LOADED_AT,
         BATCH_ID
@@ -46,7 +46,7 @@ latest_customer AS (
     FROM flattened
 
     QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY customer_id
+        PARTITION BY store_id
         ORDER BY
             last_modified_date DESC,
             LOADED_AT DESC,
@@ -56,13 +56,13 @@ latest_customer AS (
 )
 
 SELECT
-    customer_id,
+    store_id,
     last_modified_date,
-    raw_customer_data,
+    raw_store_data,
     SOURCE_FILE,
     LOADED_AT,
     BATCH_ID
 
-FROM latest_customer
+FROM latest_store
 
 {% endsnapshot %}
