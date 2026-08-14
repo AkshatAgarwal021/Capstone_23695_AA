@@ -35,11 +35,12 @@ clean-targets:         # directories to be removed by `dbt clean`
 
 models:
   Capstone_23695_AA:
-    staging: 
-      +schema: bronze
+    staging:
       bronze:
         +schema: bronze
-      silver:
-        +schema: silver
-      gold:
-        +schema: gold
+
+    silver:
+      +schema: silver
+
+    marts:
+      +schema: gold
