@@ -283,6 +283,40 @@ cleaned AS (
 
 
         /*
+           REGION
+
+           Required for DIM_Store.
+        */
+
+        INITCAP(
+            REGEXP_REPLACE(
+                TRIM(
+                    store_data:region::VARCHAR
+                ),
+                '[^A-Za-z0-9 ''&/-]',
+                ''
+            )
+        ) AS region,
+
+
+        /*
+           STORE TYPE
+
+           Required for DIM_Store.
+        */
+
+        INITCAP(
+            REGEXP_REPLACE(
+                TRIM(
+                    store_data:store_type::VARCHAR
+                ),
+                '[^A-Za-z0-9 ''&/-]',
+                ''
+            )
+        ) AS store_type,
+
+
+        /*
            STORE SIZE IN SQUARE FEET
         */
 
