@@ -116,38 +116,153 @@ cleaned AS (
  
         /*
            PHONE
-           Normalize to digits only
-           Validate 10-digit pattern
+           Normalize to US format:
+           (XXX) XXX-XXXX
+
+           Supports:
+           10-digit numbers
+           11-digit numbers beginning with 1
         */
  
         CASE
-            WHEN REGEXP_LIKE(
+ 
+            WHEN LENGTH(
+                REGEXP_REPLACE(
+                    TRIM(customer_data:phone::VARCHAR),
+                    '[^0-9]',
+                    ''
+                )
+            ) = 10
+ 
+            THEN CONCAT(
+                '(',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(customer_data:phone::VARCHAR),
+                        '[^0-9]',
+                        ''
+                    ),
+                    1,
+                    3
+                ),
+                ') ',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(customer_data:phone::VARCHAR),
+                        '[^0-9]',
+                        ''
+                    ),
+                    4,
+                    3
+                ),
+                '-',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(customer_data:phone::VARCHAR),
+                        '[^0-9]',
+                        ''
+                    ),
+                    7,
+                    4
+                )
+            )
+ 
+            WHEN LENGTH(
+                REGEXP_REPLACE(
+                    TRIM(customer_data:phone::VARCHAR),
+                    '[^0-9]',
+                    ''
+                )
+            ) = 11
+ 
+            AND LEFT(
                 REGEXP_REPLACE(
                     TRIM(customer_data:phone::VARCHAR),
                     '[^0-9]',
                     ''
                 ),
-                '^[0-9]{10}$'
+                1
+            ) = '1'
+ 
+            THEN CONCAT(
+                '(',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(customer_data:phone::VARCHAR),
+                        '[^0-9]',
+                        ''
+                    ),
+                    2,
+                    3
+                ),
+                ') ',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(customer_data:phone::VARCHAR),
+                        '[^0-9]',
+                        ''
+                    ),
+                    5,
+                    3
+                ),
+                '-',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(customer_data:phone::VARCHAR),
+                        '[^0-9]',
+                        ''
+                    ),
+                    8,
+                    4
+                )
             )
-            THEN REGEXP_REPLACE(
-                TRIM(customer_data:phone::VARCHAR),
-                '[^0-9]',
-                ''
-            )
+ 
             ELSE NULL
+ 
         END AS phone,
  
+ 
+        /*
+           INVALID PHONE FLAG
+           
+           Valid:
+           10 digits
+           11 digits beginning with 1
+        */
+ 
         CASE
-            WHEN REGEXP_LIKE(
+ 
+            WHEN LENGTH(
+                REGEXP_REPLACE(
+                    TRIM(customer_data:phone::VARCHAR),
+                    '[^0-9]',
+                    ''
+                )
+            ) = 10
+ 
+            THEN FALSE
+ 
+            WHEN LENGTH(
+                REGEXP_REPLACE(
+                    TRIM(customer_data:phone::VARCHAR),
+                    '[^0-9]',
+                    ''
+                )
+            ) = 11
+ 
+            AND LEFT(
                 REGEXP_REPLACE(
                     TRIM(customer_data:phone::VARCHAR),
                     '[^0-9]',
                     ''
                 ),
-                '^[0-9]{10}$'
-            )
+                1
+            ) = '1'
+ 
             THEN FALSE
+ 
             ELSE TRUE
+ 
         END AS invalid_phone_flag,
  
  

@@ -153,6 +153,63 @@ cleaned AS (
 
 
         /*
+           BRAND
+           Required for DIM_Product.
+        */
+
+        INITCAP(
+            REGEXP_REPLACE(
+                TRIM(product_data:brand::VARCHAR),
+                '[^A-Za-z0-9 ''&.-]',
+                ''
+            )
+        ) AS brand,
+
+
+        /*
+           COLOR
+           Required for DIM_Product.
+        */
+
+        INITCAP(
+            REGEXP_REPLACE(
+                TRIM(product_data:color::VARCHAR),
+                '[^A-Za-z0-9 ''&/-]',
+                ''
+            )
+        ) AS color,
+
+
+        /*
+           SIZE
+           Required for DIM_Product.
+
+           Kept as a cleaned string because product
+           sizes may contain values such as:
+           S, M, L, XL, 42, 12 Oz, etc.
+        */
+
+        TRIM(
+            REGEXP_REPLACE(
+                product_data:size::VARCHAR,
+                '[^A-Za-z0-9 ''.-]',
+                ''
+            )
+        ) AS size,
+
+
+        /*
+           SUPPLIER ID
+           Used to connect DIM_Product to DIM_Supplier.
+        */
+
+        NULLIF(
+            TRIM(product_data:supplier_id::VARCHAR),
+            ''
+        ) AS supplier_id,
+
+
+        /*
            UNIT PRICE
            Parse currency strings such as:
            $24,005.75
