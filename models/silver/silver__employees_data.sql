@@ -44,10 +44,6 @@ cleaned AS (
 
     SELECT
 
-        /*
-           AUDIT / LINEAGE METADATA
-        */
-
         SOURCE_FILE,
         ROW_NUMBER,
         LOADED_AT,
@@ -68,10 +64,6 @@ cleaned AS (
 
         /*
            FIRST NAME
-
-           Trim whitespace
-           Remove unwanted characters
-           Standardize capitalization
         */
 
         INITCAP(
@@ -102,9 +94,6 @@ cleaned AS (
 
         /*
            EMAIL
-
-           Normalize to lowercase.
-           Invalid emails become NULL.
         */
 
         CASE
@@ -147,13 +136,71 @@ cleaned AS (
 
         /*
            PHONE
-
-           Keep digits only.
-           Validate 10-digit format.
+           US FORMAT: (XXX) XXX-XXXX
         */
 
         CASE
-            WHEN REGEXP_LIKE(
+
+            WHEN LENGTH(
+                REGEXP_REPLACE(
+                    TRIM(
+                        employee_data:phone::VARCHAR
+                    ),
+                    '[^0-9]',
+                    ''
+                )
+            ) = 10
+
+            THEN CONCAT(
+                '(',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            employee_data:phone::VARCHAR
+                        ),
+                        '[^0-9]',
+                        ''
+                    ),
+                    1,
+                    3
+                ),
+                ') ',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            employee_data:phone::VARCHAR
+                        ),
+                        '[^0-9]',
+                        ''
+                    ),
+                    4,
+                    3
+                ),
+                '-',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            employee_data:phone::VARCHAR
+                        ),
+                        '[^0-9]',
+                        ''
+                    ),
+                    7,
+                    4
+                )
+            )
+
+            WHEN LENGTH(
+                REGEXP_REPLACE(
+                    TRIM(
+                        employee_data:phone::VARCHAR
+                    ),
+                    '[^0-9]',
+                    ''
+                )
+            ) = 11
+
+            AND LEFT(
                 REGEXP_REPLACE(
                     TRIM(
                         employee_data:phone::VARCHAR
@@ -161,16 +208,50 @@ cleaned AS (
                     '[^0-9]',
                     ''
                 ),
-                '^[0-9]{10}$'
-            )
-            THEN REGEXP_REPLACE(
-                TRIM(
-                    employee_data:phone::VARCHAR
+                1
+            ) = '1'
+
+            THEN CONCAT(
+                '(',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            employee_data:phone::VARCHAR
+                        ),
+                        '[^0-9]',
+                        ''
+                    ),
+                    2,
+                    3
                 ),
-                '[^0-9]',
-                ''
+                ') ',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            employee_data:phone::VARCHAR
+                        ),
+                        '[^0-9]',
+                        ''
+                    ),
+                    5,
+                    3
+                ),
+                '-',
+                SUBSTR(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            employee_data:phone::VARCHAR
+                        ),
+                        '[^0-9]',
+                        ''
+                    ),
+                    8,
+                    4
+                )
             )
+
             ELSE NULL
+
         END AS phone,
 
 
@@ -179,7 +260,30 @@ cleaned AS (
         */
 
         CASE
-            WHEN REGEXP_LIKE(
+
+            WHEN LENGTH(
+                REGEXP_REPLACE(
+                    TRIM(
+                        employee_data:phone::VARCHAR
+                    ),
+                    '[^0-9]',
+                    ''
+                )
+            ) = 10
+
+            THEN FALSE
+
+            WHEN LENGTH(
+                REGEXP_REPLACE(
+                    TRIM(
+                        employee_data:phone::VARCHAR
+                    ),
+                    '[^0-9]',
+                    ''
+                )
+            ) = 11
+
+            AND LEFT(
                 REGEXP_REPLACE(
                     TRIM(
                         employee_data:phone::VARCHAR
@@ -187,21 +291,25 @@ cleaned AS (
                     '[^0-9]',
                     ''
                 ),
-                '^[0-9]{10}$'
-            )
+                1
+            ) = '1'
+
             THEN FALSE
+
             ELSE TRUE
+
         END AS invalid_phone_flag,
 
 
         /*
            JOB TITLE
+           Source JSON field = role
         */
 
         INITCAP(
             REGEXP_REPLACE(
                 TRIM(
-                    employee_data:job_title::VARCHAR
+                    employee_data:role::VARCHAR
                 ),
                 '[^A-Za-z0-9 ''&/-]',
                 ''
@@ -226,11 +334,12 @@ cleaned AS (
 
         /*
            STORE ID
+           Source JSON field = work_location
         */
 
         NULLIF(
             TRIM(
-                employee_data:store_id::VARCHAR
+                employee_data:work_location::VARCHAR
             ),
             ''
         ) AS store_id,
@@ -238,8 +347,6 @@ cleaned AS (
 
         /*
            HIRE DATE
-
-           Standardized to DATE.
         */
 
         TRY_TO_DATE(
@@ -254,19 +361,12 @@ cleaned AS (
 
         /*
            SALARY
-
-           Parse monetary values such as:
-           $24,005.75
         */
 
         TRY_TO_DECIMAL(
             NULLIF(
-                REGEXP_REPLACE(
-                    TRIM(
-                        employee_data:salary::VARCHAR
-                    ),
-                    '[$,]',
-                    ''
+                TRIM(
+                    employee_data:salary::VARCHAR
                 ),
                 ''
             ),
@@ -293,13 +393,7 @@ cleaned AS (
 ),
 
 /*
-   3. EMPLOYEE-SPECIFIC BASIC DERIVED ATTRIBUTES
-
-   No business-specific transformation is required
-   by the problem statement for Employees.
-
-   We therefore keep this limited to useful
-   standardized attributes.
+   3. DERIVED ATTRIBUTE
 */
 
 derived AS (
@@ -307,10 +401,6 @@ derived AS (
     SELECT
 
         e.*,
-
-        /*
-           FULL NAME
-        */
 
         TRIM(
             CONCAT_WS(
@@ -328,10 +418,6 @@ derived AS (
    4. DEDUPLICATION
 
    Natural key = employee_id
-
-   Keep the most recently modified version.
-
-   Metadata provides deterministic tie-breakers.
 */
 
 deduplicated AS (

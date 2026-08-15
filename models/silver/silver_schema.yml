@@ -1,0 +1,88 @@
+version: 2
+
+models:
+
+  - name: silver__customers_data
+    description: "Cleaned and standardized customer data for downstream reporting and analytics."
+    columns:
+      - name: customer_id
+        description: "Unique customer identifier."
+        tests:
+          - not_null
+          - unique
+
+  - name: silver__products_data
+    description: "Cleaned and standardized product data including pricing, stock, product hierarchy, and derived product metrics."
+    columns:
+      - name: product_id
+        description: "Unique product identifier."
+        tests:
+          - not_null
+          - unique
+
+  - name: silver__orders_data
+    description: "Cleaned and aggregated order data at order grain, including profitability, timing, and delivery metrics."
+    columns:
+      - name: order_id
+        description: "Unique order identifier."
+        tests:
+          - not_null
+          - unique
+
+  - name: silver__stores_data
+    description: "Cleaned and standardized store data including store size, address, performance, and store-age metrics."
+    columns:
+      - name: store_id
+        description: "Unique store identifier."
+        tests:
+          - not_null
+          - unique
+
+  - name: silver__campaigns_data
+    description: "Cleaned and standardized marketing campaign data including campaign duration, target-audience segmentation, and financial metrics."
+    columns:
+      - name: campaign_id
+        description: "Unique campaign identifier."
+        tests:
+          - not_null
+          - unique
+
+  - name: silver__suppliers_data
+    description: "Cleaned and standardized supplier data including supplier identity, contact information, payment terms, and supplier type."
+    columns:
+      - name: supplier_id
+        description: "Unique supplier identifier."
+        tests:
+          - not_null
+          - unique
+
+  - name: silver__employees_data
+    description: "Cleaned and standardized employee data for downstream reporting and store-related analysis."
+    columns:
+      - name: employee_id
+        description: "Unique employee identifier."
+        tests:
+          - not_null
+          - unique
+
+  - name: silver__inventory_data
+    description: "Daily product inventory positions derived from product snapshots and completed order activity."
+    columns:
+      - name: product_id
+        description: "Product identifier."
+        tests:
+          - not_null
+
+      - name: snapshot_date
+        description: "Product inventory snapshot date."
+        tests:
+          - not_null
+
+      - name: low_stock_flag
+        description: "Indicates whether ending stock is below the reorder level."
+
+      - name: stale_snapshot_flag
+        description: "Indicates that the product snapshot has no prior snapshot or that the gap between snapshots is greater than one day."
+
+      - name: negative_balance_flag
+        description: "Indicates a negative inventory or inferred balance."

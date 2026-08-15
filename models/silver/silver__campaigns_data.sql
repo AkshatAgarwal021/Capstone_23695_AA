@@ -1,316 +1,262 @@
-{{ config(
-    materialized='table'
-) }}
+{{ config(materialized="table") }}
 
-WITH source_data AS (
+with
+    source_data as (
 
-    SELECT
-        SOURCE_FILE,
-        ROW_NUMBER,
-        RAW_DATA,
-        LOADED_AT,
-        BATCH_ID
-    FROM {{ ref('stg_bronze__campaigns_data') }}
+        select
+            source_file,
+            row_number,
+            raw_data,
+            loaded_at,
+            batch_id
+        from {{ ref("stg_bronze__campaigns_data") }}
 
-),
+    ),
 
-/*
+    /*
    1. FLATTEN THE CAMPAIGNS ARRAY
 */
+    flattened as (
 
-flattened AS (
+        select
+            s.source_file,
+            s.row_number,
+            s.loaded_at,
+            s.batch_id,
 
-    SELECT
-        s.SOURCE_FILE,
-        s.ROW_NUMBER,
-        s.LOADED_AT,
-        s.BATCH_ID,
+            campaign.value as campaign_data
 
-        campaign.value AS campaign_data
+        from
+            source_data s,
 
-    FROM source_data s,
+            lateral flatten(
+                input => s.raw_data:campaigns_data
+            ) as campaign
 
-    LATERAL FLATTEN(
-        INPUT => s.RAW_DATA:campaigns_data
-    ) AS campaign
+    ),
 
-),
-
-/*
+    /*
    2. EXTRACT + CLEAN + STANDARDIZE
 */
+    cleaned as (
 
-cleaned AS (
+        select
 
-    SELECT
-
-        /*
+            /*
            AUDIT / LINEAGE METADATA
         */
+            source_file,
+            row_number,
+            loaded_at,
+            batch_id,
 
-        SOURCE_FILE,
-        ROW_NUMBER,
-        LOADED_AT,
-        BATCH_ID,
-
-
-        /*
+            /*
            CAMPAIGN ID
         */
+            nullif(
+                trim(campaign_data:campaign_id::varchar),
+                ''
+            ) as campaign_id,
 
-        NULLIF(
-            TRIM(
-                campaign_data:campaign_id::VARCHAR
-            ),
-            ''
-        ) AS campaign_id,
-
-
-        /*
+            /*
            CAMPAIGN NAME
            Trim whitespace
            Remove unwanted characters
            Standardize capitalization
         */
+            initcap(
+                regexp_replace(
+                    trim(campaign_data:campaign_name::varchar),
+                    '[^A-Za-z0-9 ''&-]',
+                    ''
+                )
+            ) as campaign_name,
 
-        INITCAP(
-            REGEXP_REPLACE(
-                TRIM(
-                    campaign_data:campaign_name::VARCHAR
-                ),
-                '[^A-Za-z0-9 ''&-]',
-                ''
-            )
-        ) AS campaign_name,
+            /*
+           TARGET AUDIENCE
 
+           Preserve the complete demographic description.
+           Example:
+           "families 18-25" -> "Families 18-25"
+           "suburban"       -> "Suburban"
+        */
+            initcap(
+                regexp_replace(
+                    trim(campaign_data:target_audience::varchar),
+                    '[^A-Za-z0-9 ''&/-]',
+                    ''
+                )
+            ) as target_audience_segmentation,
 
-        /*
+            /*
            START DATE
         */
+            try_to_date(
+                nullif(trim(campaign_data:start_date::varchar), '')
+            ) as start_date,
 
-        TRY_TO_DATE(
-            NULLIF(
-                TRIM(
-                    campaign_data:start_date::VARCHAR
-                ),
-                ''
-            )
-        ) AS start_date,
-
-
-        /*
+            /*
            END DATE
         */
+            try_to_date(
+                nullif(trim(campaign_data:end_date::varchar), '')
+            ) as end_date,
 
-        TRY_TO_DATE(
-            NULLIF(
-                TRIM(
-                    campaign_data:end_date::VARCHAR
-                ),
-                ''
-            )
-        ) AS end_date,
-
-
-        /*
+            /*
            BUDGET
-           Parse currency strings
+           Parse currency strings.
            Example:
            $24,005.75 -> 24005.75
         */
-
-        TRY_TO_DECIMAL(
-            NULLIF(
-                REGEXP_REPLACE(
-                    TRIM(
-                        campaign_data:budget::VARCHAR
+            try_to_decimal(
+                nullif(
+                    regexp_replace(
+                        trim(campaign_data:budget::varchar),
+                        '[$,]',
+                        ''
                     ),
-                    '[$,]',
                     ''
                 ),
-                ''
-            ),
-            18,
-            2
-        ) AS budget,
+                18,
+                2
+            ) as budget,
 
-
-        /*
+            /*
            TOTAL COST
         */
-
-        TRY_TO_DECIMAL(
-            NULLIF(
-                REGEXP_REPLACE(
-                    TRIM(
-                        campaign_data:total_cost::VARCHAR
+            try_to_decimal(
+                nullif(
+                    regexp_replace(
+                        trim(campaign_data:total_cost::varchar),
+                        '[$,]',
+                        ''
                     ),
-                    '[$,]',
                     ''
                 ),
-                ''
-            ),
-            18,
-            2
-        ) AS total_cost,
+                18,
+                2
+            ) as total_cost,
 
-
-        /*
+            /*
            TOTAL REVENUE
-        */
 
-        TRY_TO_DECIMAL(
-            NULLIF(
-                REGEXP_REPLACE(
-                    TRIM(
-                        campaign_data:total_revenue::VARCHAR
+           Normalize to numeric.
+           Not used to calculate final ROI in Silver.
+        */
+            try_to_decimal(
+                nullif(
+                    regexp_replace(
+                        trim(campaign_data:total_revenue::varchar),
+                        '[$,]',
+                        ''
                     ),
-                    '[$,]',
                     ''
                 ),
-                ''
-            ),
-            18,
-            2
-        ) AS total_revenue,
+                18,
+                2
+            ) as total_revenue,
 
-
-        /*
+            /*
            ROI CALCULATION
 
-           Only cast the existing source value
-           from string to numeric.
-
-           ROI itself is NOT calculated in Silver.
+           Cast the source value to numeric.
+           Do not calculate ROI here.
         */
-
-        TRY_TO_DECIMAL(
-            NULLIF(
-                TRIM(
-                    campaign_data:roi_calculation::VARCHAR
+            try_to_decimal(
+                nullif(
+                    trim(campaign_data:roi_calculation::varchar),
+                    ''
                 ),
-                ''
-            ),
-            18,
-            4
-        ) AS roi_calculation,
+                18,
+                4
+            ) as roi_calculation,
 
-
-        /*
-           DEMOGRAPHICS
-
-           Keep the source demographic information
-           available for audience segmentation.
-        */
-
-        campaign_data:demographics AS demographics,
-
-
-        /*
+            /*
            LAST MODIFIED DATE
         */
+            try_to_timestamp_ntz(
+                nullif(
+                    trim(campaign_data:last_modified_date::varchar),
+                    ''
+                )
+            ) as last_modified_date
 
-        TRY_TO_TIMESTAMP_NTZ(
-            NULLIF(
-                TRIM(
-                    campaign_data:last_modified_date::VARCHAR
-                ),
-                ''
-            )
-        ) AS last_modified_date
+        from flattened
 
-    FROM flattened
+    ),
 
-),
-
-/*
+    /*
    3. CAMPAIGN-SPECIFIC DERIVED ATTRIBUTES
 */
+    derived as (
 
-derived AS (
+        select
 
-    SELECT
+            c.*,
 
-        c.*,
-
-
-        /*
+            /*
            CAMPAIGN DURATION
 
-           Duration in days between start and end dates.
+           Number of days between start and end dates.
         */
+            case
+                when c.start_date is not null
+                     and c.end_date is not null
+                then datediff(
+                    day,
+                    c.start_date,
+                    c.end_date
+                )
+                else null
+            end as campaign_duration_days
 
-        CASE
-            WHEN c.start_date IS NOT NULL
-                 AND c.end_date IS NOT NULL
-            THEN DATEDIFF(
-                DAY,
-                c.start_date,
-                c.end_date
-            )
-            ELSE NULL
-        END AS campaign_duration_days,
+        from cleaned c
 
+    ),
 
-        /*
-           AUDIENCE SEGMENT
-
-           The problem statement requires
-           demographic-based segmentation.
-           
-           Until the exact demographic fields/rules
-           are confirmed, preserve the source data.
-        */
-
-        NULL::VARCHAR AS audience_segment
-
-    FROM cleaned c
-
-),
-
-/*
+    /*
    4. DEDUPLICATION
 
    Natural key = campaign_id
 
    Keep the most recently modified record.
 */
+    deduplicated as (
 
-deduplicated AS (
+        select *
 
-    SELECT *
+        from derived
 
-    FROM derived
+        qualify
+            row_number() over (
 
-    QUALIFY ROW_NUMBER() OVER (
+                partition by
+                    case
+                        when campaign_id is not null
+                        then campaign_id
 
-        PARTITION BY
-            CASE
-                WHEN campaign_id IS NOT NULL
-                    THEN campaign_id
+                        else concat(
+                            '_NULL_',
+                            source_file,
+                            '_',
+                            row_number
+                        )
+                    end
 
-                ELSE CONCAT(
-                    '_NULL_',
-                    SOURCE_FILE,
-                    '_',
-                    ROW_NUMBER
-                )
-            END
+                order by
+                    last_modified_date desc nulls last,
+                    loaded_at desc,
+                    source_file desc,
+                    row_number desc
 
-        ORDER BY
-            last_modified_date DESC NULLS LAST,
-            LOADED_AT DESC,
-            SOURCE_FILE DESC,
-            ROW_NUMBER DESC
+            ) = 1
 
-    ) = 1
-
-)
+    )
 
 /*
    FINAL SILVER CAMPAIGN TABLE
 */
 
-SELECT *
+select *
 
-FROM deduplicated
+from deduplicated

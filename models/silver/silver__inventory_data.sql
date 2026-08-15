@@ -5,39 +5,28 @@
 WITH
 
 /* ============================================================
-   1. PRODUCT SNAPSHOT HISTORY
+   1. PRODUCT SNAPSHOT HISTORY FROM BRONZE
+
+   Each product source file represents a snapshot.
+
+   Snapshot date is extracted from SOURCE_FILE.
    ============================================================ */
 
-product_snapshots AS (
-
-    SELECT
-        product_id,
-        last_modified_date,
-        raw_product_data,
-        dbt_valid_from,
-        dbt_valid_to,
-        SOURCE_FILE,
-        LOADED_AT,
-        BATCH_ID
-
-    FROM {{ ref('PRODUCTS_SNAPSHOT') }}
-
-),
-
-/* ============================================================
-   2. EXTRACT PRODUCT STOCK DATA
-============================================================ */
-
-product_snapshot_data AS (
+products_flattened AS (
 
     SELECT
 
-        product_id,
+        b.SOURCE_FILE,
+        b.ROW_NUMBER,
+        b.LOADED_AT,
+        b.BATCH_ID,
+
+        item.value:product_id::VARCHAR AS product_id,
 
         TRY_TO_NUMBER(
             NULLIF(
                 TRIM(
-                    raw_product_data:stock_quantity::VARCHAR
+                    item.value:stock_quantity::VARCHAR
                 ),
                 ''
             )
@@ -46,147 +35,119 @@ product_snapshot_data AS (
         TRY_TO_NUMBER(
             NULLIF(
                 TRIM(
-                    raw_product_data:reorder_level::VARCHAR
+                    item.value:reorder_level::VARCHAR
                 ),
                 ''
             )
         ) AS reorder_level,
 
-        /*
-           Use the product's source last_modified_date
-           as the business snapshot date.
-        */
+        TRY_TO_DATE(
+            REGEXP_SUBSTR(
+                b.SOURCE_FILE,
+                '[0-9]{4}-[0-9]{2}-[0-9]{2}'
+            )
+        ) AS snapshot_date
 
-        CAST(
-            last_modified_date AS DATE
-        ) AS snapshot_date,
+    FROM {{ ref('stg_bronze__products_data') }} AS b,
+
+    LATERAL FLATTEN(
+        INPUT => b.RAW_DATA:products_data
+    ) AS item
+
+),
+
+/* ============================================================
+   2. DEDUPLICATE PRODUCT + SNAPSHOT DATE
+
+   One product record per snapshot date.
+   ============================================================ */
+
+deduped_products AS (
+
+    SELECT
+
+        product_id,
+        stock_quantity,
+        reorder_level,
+        snapshot_date,
 
         SOURCE_FILE,
+        ROW_NUMBER,
         LOADED_AT,
         BATCH_ID
 
-    FROM product_snapshots
+    FROM products_flattened
 
     WHERE product_id IS NOT NULL
-
-),
-
-/* ============================================================
-   3. DATE RANGE
-============================================================ */
-
-date_bounds AS (
-
-    SELECT
-        MIN(snapshot_date) AS min_date,
-        MAX(snapshot_date) AS max_date
-
-    FROM product_snapshot_data
-
-),
-
-calendar AS (
-
-    SELECT
-        DATEADD(
-            DAY,
-            SEQ4(),
-            min_date
-        ) AS calendar_date
-
-    FROM date_bounds,
-
-    TABLE(
-        GENERATOR(
-            ROWCOUNT => 10000
-        )
-    )
-
-    WHERE DATEADD(
-        DAY,
-        SEQ4(),
-        min_date
-    ) <= max_date
-
-),
-
-/* ============================================================
-   4. PRODUCT + DATE GRID
-============================================================ */
-
-product_dates AS (
-
-    SELECT
-
-        p.product_id,
-        c.calendar_date
-
-    FROM (
-        SELECT DISTINCT
-            product_id
-        FROM product_snapshot_data
-    ) p
-
-    CROSS JOIN calendar c
-
-),
-
-/* ============================================================
-   5. CARRY FORWARD LATEST PRODUCT SNAPSHOT
-============================================================ */
-
-daily_snapshot AS (
-
-    SELECT
-
-        pd.product_id,
-        pd.calendar_date AS stock_date,
-
-        ps.stock_quantity AS ending_stock,
-        ps.reorder_level,
-
-        ps.snapshot_date,
-
-        DATEDIFF(
-            DAY,
-            ps.snapshot_date,
-            pd.calendar_date
-        ) AS days_since_snapshot,
-
-        ps.SOURCE_FILE,
-        ps.LOADED_AT,
-        ps.BATCH_ID
-
-    FROM product_dates pd
-
-    LEFT JOIN product_snapshot_data ps
-
-        ON pd.product_id = ps.product_id
-
-       AND ps.snapshot_date <= pd.calendar_date
+      AND snapshot_date IS NOT NULL
 
     QUALIFY ROW_NUMBER() OVER (
 
         PARTITION BY
-            pd.product_id,
-            pd.calendar_date
+            product_id,
+            snapshot_date
 
         ORDER BY
-            ps.snapshot_date DESC,
-            ps.LOADED_AT DESC,
-            ps.SOURCE_FILE DESC
+            LOADED_AT DESC,
+            SOURCE_FILE DESC,
+            ROW_NUMBER DESC
 
     ) = 1
 
 ),
 
 /* ============================================================
-   6. BRONZE ORDERS
-============================================================ */
+   3. STOCK HISTORY
 
-order_source AS (
+   Beginning stock = previous snapshot's ending stock
+   Ending stock    = current snapshot stock
+   ============================================================ */
+
+stock_history AS (
 
     SELECT
+
+        product_id,
+
+        snapshot_date,
+
+        reorder_level,
+
+        LAG(
+            stock_quantity
+        ) OVER (
+            PARTITION BY product_id
+            ORDER BY snapshot_date
+        ) AS beginning_stock,
+
+        stock_quantity AS ending_stock,
+
+        DATEDIFF(
+            DAY,
+
+            LAG(
+                snapshot_date
+            ) OVER (
+                PARTITION BY product_id
+                ORDER BY snapshot_date
+            ),
+
+            snapshot_date
+
+        ) AS days_since_last_snapshot
+
+    FROM deduped_products
+
+),
+
+/* ============================================================
+   4. RAW ORDERS FROM BRONZE
+   ============================================================ */
+
+orders_source AS (
+
+    SELECT
+
         SOURCE_FILE,
         ROW_NUMBER,
         RAW_DATA,
@@ -198,33 +159,13 @@ order_source AS (
 ),
 
 /* ============================================================
-   7. FLATTEN ORDERS
-============================================================ */
+   5. FLATTEN ORDERS
 
-flattened_orders AS (
+   Extract the natural order_id first because we need to
+   deduplicate orders before calculating sold quantity.
+   ============================================================ */
 
-    SELECT
-
-        s.SOURCE_FILE,
-        s.ROW_NUMBER,
-        s.LOADED_AT,
-        s.BATCH_ID,
-
-        order_data.value AS order_data
-
-    FROM order_source s,
-
-    LATERAL FLATTEN(
-        INPUT => s.RAW_DATA:orders_data
-    ) AS order_data
-
-),
-
-/* ============================================================
-   8. FLATTEN ORDER ITEMS
-============================================================ */
-
-flattened_order_items AS (
+orders_flattened AS (
 
     SELECT
 
@@ -233,37 +174,113 @@ flattened_order_items AS (
         o.LOADED_AT,
         o.BATCH_ID,
 
+        order_data.value:order_id::VARCHAR AS order_id,
+
+        TRY_TO_TIMESTAMP_NTZ(
+            NULLIF(
+                TRIM(
+                    order_data.value:order_date::VARCHAR
+                ),
+                ''
+            )
+        ) AS order_datetime,
+
         TRY_TO_DATE(
             NULLIF(
                 TRIM(
-                    o.order_data:order_date::VARCHAR
+                    order_data.value:order_date::VARCHAR
                 ),
                 ''
             )
         ) AS order_date,
 
-        LOWER(
+        UPPER(
             TRIM(
-                o.order_data:status::VARCHAR
+                order_data.value:order_status::VARCHAR
             )
         ) AS order_status,
 
-        item.value AS item_data
+        order_data.value:order_items AS order_items
 
-    FROM flattened_orders o,
+    FROM orders_source AS o,
 
     LATERAL FLATTEN(
-        INPUT => o.order_data:order_items
+        INPUT => o.RAW_DATA:orders_data
+    ) AS order_data
+
+),
+
+/* ============================================================
+   6. DEDUPLICATE ORDERS
+
+   This is the important difference from our previous version.
+
+   If the same order appears in multiple Bronze source files,
+   only keep the latest copy.
+
+   This makes Bronze behave like the "current orders" view
+   used by your friend's solution.
+   ============================================================ */
+
+orders_current AS (
+
+    SELECT
+
+        order_id,
+        order_date,
+        order_status,
+        order_items
+
+    FROM orders_flattened
+
+    WHERE order_id IS NOT NULL
+
+    QUALIFY ROW_NUMBER() OVER (
+
+        PARTITION BY order_id
+
+        ORDER BY
+            order_datetime DESC NULLS LAST,
+            LOADED_AT DESC,
+            SOURCE_FILE DESC,
+            ROW_NUMBER DESC
+
+    ) = 1
+
+),
+
+/* ============================================================
+   7. FLATTEN ORDER ITEMS
+
+   ============================================================ */
+
+order_items_flattened AS (
+
+    SELECT
+
+        o.order_id,
+        o.order_date,
+        o.order_status,
+
+        item.value AS item_data
+
+    FROM orders_current AS o,
+
+    LATERAL FLATTEN(
+        INPUT => o.order_items
     ) AS item
 
 ),
 
 /* ============================================================
-   9. SOLD QUANTITY
-   ONLY COMPLETED ORDERS
-============================================================ */
+   8. SOLD QUANTITY
 
-sold_quantity AS (
+   ONLY COMPLETED ORDERS.
+
+   One product per day.
+   ============================================================ */
+
+sold_quantities AS (
 
     SELECT
 
@@ -274,7 +291,7 @@ sold_quantity AS (
             ''
         ) AS product_id,
 
-        order_date AS stock_date,
+        order_date AS sold_date,
 
         SUM(
             COALESCE(
@@ -290,146 +307,176 @@ sold_quantity AS (
             )
         ) AS sold_quantity
 
-    FROM flattened_order_items
+    FROM order_items_flattened
 
-    WHERE order_status = 'completed'
+    WHERE order_status = 'COMPLETED'
 
     GROUP BY
+
         product_id,
-        stock_date
+        sold_date
 
 ),
 
 /* ============================================================
-   10. COMBINE STOCK + SALES
-============================================================ */
+   9. JOIN STOCK HISTORY TO SOLD QUANTITY
+   ============================================================ */
 
-combined AS (
+joined AS (
 
     SELECT
 
-        d.product_id,
-        d.stock_date,
+        s.product_id,
 
-        d.ending_stock,
-        d.reorder_level,
+        s.snapshot_date,
 
-        d.snapshot_date,
-        d.days_since_snapshot,
+        s.beginning_stock,
+
+        s.ending_stock,
+
+        s.reorder_level,
+
+        s.days_since_last_snapshot,
 
         COALESCE(
-            s.sold_quantity,
+            sq.sold_quantity,
             0
-        ) AS sold_quantity,
+        ) AS sold_quantity
 
-        d.SOURCE_FILE,
-        d.LOADED_AT,
-        d.BATCH_ID
+    FROM stock_history AS s
 
-    FROM daily_snapshot d
+    LEFT JOIN sold_quantities AS sq
 
-    LEFT JOIN sold_quantity s
+        ON s.product_id = sq.product_id
 
-        ON d.product_id = s.product_id
-
-       AND d.stock_date = s.stock_date
+       AND s.snapshot_date = sq.sold_date
 
 ),
 
 /* ============================================================
-   11. BEGINNING STOCK
-============================================================ */
+   10. CALCULATE PURCHASED QUANTITY
+   ============================================================ */
 
-with_beginning_stock AS (
-
-    SELECT
-
-        c.*,
-
-        LAG(
-            c.ending_stock
-        ) OVER (
-            PARTITION BY c.product_id
-            ORDER BY c.stock_date
-        ) AS beginning_stock
-
-    FROM combined c
-
-),
-
-/* ============================================================
-   12. INFER PURCHASED QUANTITY
-============================================================ */
-
-with_purchases AS (
+calculated AS (
 
     SELECT
 
-        b.*,
+        product_id,
+
+        snapshot_date,
+
+        beginning_stock,
+
+        ending_stock,
+
+        sold_quantity,
 
         CASE
 
-            WHEN b.beginning_stock IS NOT NULL
+            WHEN beginning_stock IS NULL
+                THEN NULL
 
-            THEN
-                b.ending_stock
-                - b.beginning_stock
-                + b.sold_quantity
+            ELSE
+                ending_stock
+                - beginning_stock
+                + sold_quantity
 
-            ELSE NULL
+        END AS purchased_quantity,
 
-        END AS purchased_quantity
+        reorder_level,
 
-    FROM with_beginning_stock b
+        days_since_last_snapshot
+
+    FROM joined
 
 ),
 
 /* ============================================================
-   13. VALIDATION / FLAGS
-============================================================ */
+   11. VALIDATION + BUSINESS FLAGS
+   ============================================================ */
 
 validated AS (
 
     SELECT
 
-        p.*,
+        product_id,
+
+        snapshot_date,
+
+        beginning_stock,
+
+        ending_stock,
+
+        sold_quantity,
+
+        purchased_quantity,
+
+        reorder_level,
+
+        /* Low stock */
 
         CASE
-            WHEN p.ending_stock < p.reorder_level
+
+            WHEN ending_stock < reorder_level
                 THEN TRUE
+
             ELSE FALSE
+
         END AS low_stock_flag,
 
+        /*
+
+           Snapshot gap handling.
+
+           First snapshot has no prior inventory position.
+
+           A gap > 1 day means the source snapshot is stale.
+        */
+
         CASE
-            WHEN p.days_since_snapshot > 1
+
+            WHEN beginning_stock IS NULL
                 THEN TRUE
+
+            WHEN days_since_last_snapshot > 1
+                THEN TRUE
+
             ELSE FALSE
-        END AS snapshot_stale_flag,
+
+        END AS stale_snapshot_flag,
+
+        days_since_last_snapshot,
+
+        /* Negative inventory / inferred balance */
 
         CASE
 
-            WHEN p.ending_stock < 0
-              OR p.beginning_stock < 0
-              OR p.purchased_quantity < 0
+            WHEN beginning_stock < 0
+                THEN TRUE
 
-            THEN TRUE
+            WHEN ending_stock < 0
+                THEN TRUE
+
+            WHEN purchased_quantity < 0
+                THEN TRUE
 
             ELSE FALSE
 
         END AS negative_balance_flag
 
-    FROM with_purchases p
+    FROM calculated
 
 )
 
 /* ============================================================
    FINAL SILVER INVENTORY TABLE
-============================================================ */
+   ============================================================ */
 
 SELECT
 
     product_id,
-    stock_date,
+
+    snapshot_date,
 
     beginning_stock,
     ending_stock,
@@ -441,14 +488,9 @@ SELECT
 
     low_stock_flag,
 
-    snapshot_date,
-    days_since_snapshot,
-    snapshot_stale_flag,
+    stale_snapshot_flag,
+    days_since_last_snapshot,
 
-    negative_balance_flag,
-
-    SOURCE_FILE,
-    LOADED_AT,
-    BATCH_ID
+    negative_balance_flag
 
 FROM validated
