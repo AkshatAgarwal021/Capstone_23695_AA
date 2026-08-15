@@ -36,11 +36,14 @@ final AS (
 
         /*
            SURROGATE KEY
+
+           Generated using dbt_utils from the
+           natural Product ID.
         */
 
-        MD5(
-            COALESCE(p.product_id, '')
-        ) AS product_key,
+        {{ dbt_utils.generate_surrogate_key([
+            'p.product_id'
+        ]) }} AS product_key,
 
 
         /*
@@ -72,9 +75,6 @@ final AS (
 
         /*
            SUPPLIER INFORMATION
-
-           Supplier information is resolved from
-           the Silver Supplier table.
         */
 
         p.supplier_id,
