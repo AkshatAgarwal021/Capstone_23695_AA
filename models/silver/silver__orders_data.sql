@@ -5,11 +5,13 @@
 WITH source_data AS (
 
     SELECT
+
         SOURCE_FILE,
         ROW_NUMBER,
         RAW_DATA,
         LOADED_AT,
         BATCH_ID
+
     FROM {{ ref('stg_bronze__orders_data') }}
 
 ),
@@ -21,6 +23,7 @@ WITH source_data AS (
 flattened_orders AS (
 
     SELECT
+
         s.SOURCE_FILE,
         s.ROW_NUMBER,
         s.LOADED_AT,
@@ -49,30 +52,68 @@ order_header AS (
         LOADED_AT,
         BATCH_ID,
 
+
+        /*
+           ORDER ID
+        */
+
         NULLIF(
             TRIM(order_data:order_id::VARCHAR),
             ''
         ) AS order_id,
+
+
+        /*
+           CUSTOMER ID
+        */
 
         NULLIF(
             TRIM(order_data:customer_id::VARCHAR),
             ''
         ) AS customer_id,
 
+
+        /*
+           STORE ID
+        */
+
         NULLIF(
             TRIM(order_data:store_id::VARCHAR),
             ''
         ) AS store_id,
+
+
+        /*
+           EMPLOYEE ID
+        */
 
         NULLIF(
             TRIM(order_data:employee_id::VARCHAR),
             ''
         ) AS employee_id,
 
+
+        /*
+           CAMPAIGN ID
+
+           Campaign associated with the order.
+
+           This is required by the Gold
+           Fact_MarketingPerformance model
+           for campaign attribution.
+        */
+
+        NULLIF(
+            TRIM(order_data:campaign_id::VARCHAR),
+            ''
+        ) AS campaign_id,
+
+
         /*
            ORDER DATE/TIME
 
-           Keep timestamp so that order hour can be derived.
+           Keep timestamp so that order hour
+           can be derived.
         */
 
         TRY_TO_TIMESTAMP_NTZ(
@@ -82,12 +123,22 @@ order_header AS (
             )
         ) AS order_datetime,
 
+
+        /*
+           ORDER DATE
+        */
+
         TRY_TO_DATE(
             NULLIF(
                 TRIM(order_data:order_date::VARCHAR),
                 ''
             )
         ) AS order_date,
+
+
+        /*
+           SHIPPING DATE
+        */
 
         TRY_TO_DATE(
             NULLIF(
@@ -96,12 +147,22 @@ order_header AS (
             )
         ) AS shipping_date,
 
+
+        /*
+           DELIVERY DATE
+        */
+
         TRY_TO_DATE(
             NULLIF(
                 TRIM(order_data:delivery_date::VARCHAR),
                 ''
             )
         ) AS delivery_date,
+
+
+        /*
+           ESTIMATED DELIVERY DATE
+        */
 
         TRY_TO_DATE(
             NULLIF(
@@ -110,16 +171,11 @@ order_header AS (
             )
         ) AS estimated_delivery_date,
 
+
         /*
            ORDER-LEVEL DISCOUNT
 
-           Source value is a PERCENTAGE.
-           Example:
-               10 = 10%
-               25 = 25%
-
-           Convert percentage to fractional rate:
-               10 / 100 = 0.10
+           Discount is a RATE / FRACTION.
         */
 
         COALESCE(
@@ -130,13 +186,16 @@ order_header AS (
                 ),
                 18,
                 6
-            ) / 100,
+            ),
             0
         ) AS order_discount_amount,
 
+
         /*
            SHIPPING COST
-           Parse currency strings such as $24,005.75
+
+           Parse currency strings such as
+           $24,005.75
         */
 
         COALESCE(
@@ -154,6 +213,7 @@ order_header AS (
             ),
             0.00
         ) AS shipping_cost,
+
 
         /*
            TAX AMOUNT
@@ -174,6 +234,11 @@ order_header AS (
             ),
             0.00
         ) AS tax_amount,
+
+
+        /*
+           ORDER ITEMS ARRAY
+        */
 
         order_data:order_items AS order_items
 
@@ -218,12 +283,23 @@ cleaned_items AS (
         ROW_NUMBER,
         LOADED_AT,
         BATCH_ID,
+
         order_id,
+
+
+        /*
+           PRODUCT ID
+        */
 
         NULLIF(
             TRIM(item_data:product_id::VARCHAR),
             ''
         ) AS product_id,
+
+
+        /*
+           QUANTITY
+        */
 
         COALESCE(
             TRY_TO_NUMBER(
@@ -234,6 +310,11 @@ cleaned_items AS (
             ),
             0
         ) AS quantity,
+
+
+        /*
+           UNIT PRICE
+        */
 
         COALESCE(
             TRY_TO_DECIMAL(
@@ -251,6 +332,11 @@ cleaned_items AS (
             0.00
         ) AS unit_price,
 
+
+        /*
+           COST PRICE
+        */
+
         COALESCE(
             TRY_TO_DECIMAL(
                 NULLIF(
@@ -267,15 +353,9 @@ cleaned_items AS (
             0.00
         ) AS cost_price,
 
+
         /*
-           ITEM DISCOUNT
-
-           Source value is a PERCENTAGE.
-           Convert to fractional rate.
-
-           Example:
-               15 = 15%
-               15 / 100 = 0.15
+           ITEM DISCOUNT IS A RATE / FRACTION
         */
 
         COALESCE(
@@ -286,7 +366,7 @@ cleaned_items AS (
                 ),
                 18,
                 6
-            ) / 100,
+            ),
             0
         ) AS item_discount_amount
 
@@ -296,6 +376,9 @@ cleaned_items AS (
 
 /*
    5. AGGREGATE ORDER ITEMS TO ORDER GRAIN
+
+   Grain:
+   one row per order.
 */
 
 order_item_aggregates AS (
@@ -316,14 +399,10 @@ order_item_aggregates AS (
             quantity * cost_price
         ) AS total_cost,
 
-        /*
-           SUM OF ITEM DISCOUNT RATES
-           Stored here as fractional rates.
-        */
-
         SUM(
             item_discount_amount
         ) AS total_discount,
+
 
         /*
            REVENUE AFTER ITEM-LEVEL DISCOUNT
@@ -334,6 +413,7 @@ order_item_aggregates AS (
             * unit_price
             * (1 - item_discount_amount)
         ) AS line_revenue,
+
 
         /*
            COST
@@ -366,6 +446,7 @@ combined AS (
         o.customer_id,
         o.store_id,
         o.employee_id,
+        o.campaign_id,
 
         o.order_datetime,
         o.order_date,
@@ -379,18 +460,47 @@ combined AS (
         o.shipping_cost,
         o.tax_amount,
 
-        COALESCE(i.total_items, 0) AS total_items,
-        COALESCE(i.total_quantity, 0) AS total_quantity,
-        COALESCE(i.total_amount, 0.00) AS total_amount,
-        COALESCE(i.total_cost, 0.00) AS total_cost,
-        COALESCE(i.total_discount, 0.00) AS total_discount,
+        COALESCE(
+            i.total_items,
+            0
+        ) AS total_items,
 
-        COALESCE(i.line_revenue, 0.00) AS line_revenue,
-        COALESCE(i.line_cost, 0.00) AS line_cost
+        COALESCE(
+            i.total_quantity,
+            0
+        ) AS total_quantity,
+
+        COALESCE(
+            i.total_amount,
+            0.00
+        ) AS total_amount,
+
+        COALESCE(
+            i.total_cost,
+            0.00
+        ) AS total_cost,
+
+        COALESCE(
+            i.total_discount,
+            0.00
+        ) AS total_discount,
+
+
+        COALESCE(
+            i.line_revenue,
+            0.00
+        ) AS line_revenue,
+
+
+        COALESCE(
+            i.line_cost,
+            0.00
+        ) AS line_cost
 
     FROM order_header o
 
     LEFT JOIN order_item_aggregates i
+
         ON o.order_id = i.order_id
 
 ),
@@ -405,6 +515,7 @@ derived AS (
 
         c.*,
 
+
         /*
            ORDER HOUR
         */
@@ -413,44 +524,80 @@ derived AS (
             HOUR FROM c.order_datetime
         ) AS order_hour,
 
+
         /*
            TIME OF DAY
         */
 
         CASE
-            WHEN EXTRACT(HOUR FROM c.order_datetime) >= 5
-                 AND EXTRACT(HOUR FROM c.order_datetime) < 12
+
+            WHEN EXTRACT(
+                HOUR FROM c.order_datetime
+            ) >= 5
+
+            AND EXTRACT(
+                HOUR FROM c.order_datetime
+            ) < 12
+
                 THEN 'Morning'
 
-            WHEN EXTRACT(HOUR FROM c.order_datetime) >= 12
-                 AND EXTRACT(HOUR FROM c.order_datetime) < 17
+
+            WHEN EXTRACT(
+                HOUR FROM c.order_datetime
+            ) >= 12
+
+            AND EXTRACT(
+                HOUR FROM c.order_datetime
+            ) < 17
+
                 THEN 'Afternoon'
 
-            WHEN EXTRACT(HOUR FROM c.order_datetime) >= 17
-                 AND EXTRACT(HOUR FROM c.order_datetime) < 22
+
+            WHEN EXTRACT(
+                HOUR FROM c.order_datetime
+            ) >= 17
+
+            AND EXTRACT(
+                HOUR FROM c.order_datetime
+            ) < 22
+
                 THEN 'Evening'
 
+
             ELSE 'Night'
+
         END AS order_time_of_day,
+
 
         /*
            CALENDAR ATTRIBUTES
         */
 
-        WEEK(c.order_date) AS order_week,
+        WEEK(
+            c.order_date
+        ) AS order_week,
 
-        MONTH(c.order_date) AS order_month,
+        MONTH(
+            c.order_date
+        ) AS order_month,
 
-        QUARTER(c.order_date) AS order_quarter,
+        QUARTER(
+            c.order_date
+        ) AS order_quarter,
 
-        YEAR(c.order_date) AS order_year,
+        YEAR(
+            c.order_date
+        ) AS order_year,
+
 
         /*
            PROFIT AMOUNT
 
-           line_revenue is already net of ITEM discount.
+           line_revenue is already net of
+           ITEM discount.
 
-           The ORDER discount is then applied multiplicatively.
+           The ORDER discount is then applied
+           multiplicatively.
         */
 
         (
@@ -460,14 +607,17 @@ derived AS (
         - c.line_cost
         - c.shipping_cost
         - c.tax_amount
-        AS profit_amount,
+            AS profit_amount,
+
 
         /*
            PROFIT MARGIN
         */
 
         CASE
+
             WHEN c.line_revenue > 0
+
             THEN
                 (
                     (
@@ -481,8 +631,11 @@ derived AS (
                     )
                     / c.line_revenue
                 ) * 100
+
             ELSE NULL
+
         END AS profit_margin_percentage,
+
 
         /*
            PROCESSING DAYS
@@ -494,6 +647,7 @@ derived AS (
             c.shipping_date
         ) AS processing_days,
 
+
         /*
            SHIPPING DAYS
         */
@@ -504,24 +658,39 @@ derived AS (
             c.delivery_date
         ) AS shipping_days,
 
+
         /*
            DELIVERY STATUS
         */
 
         CASE
+
             WHEN c.delivery_date IS NOT NULL
-                 AND c.delivery_date <= c.estimated_delivery_date
+
+                 AND c.delivery_date
+                     <= c.estimated_delivery_date
+
                 THEN 'On Time'
 
+
             WHEN c.delivery_date IS NOT NULL
-                 AND c.delivery_date > c.estimated_delivery_date
+
+                 AND c.delivery_date
+                     > c.estimated_delivery_date
+
                 THEN 'Delayed'
 
+
             WHEN c.delivery_date IS NULL
-                 AND CURRENT_DATE() > c.estimated_delivery_date
+
+                 AND CURRENT_DATE()
+                     > c.estimated_delivery_date
+
                 THEN 'Potentially Delayed'
 
+
             ELSE 'In Transit'
+
         END AS delivery_status
 
     FROM combined c
@@ -545,8 +714,11 @@ deduplicated AS (
     QUALIFY ROW_NUMBER() OVER (
 
         PARTITION BY
+
             CASE
+
                 WHEN order_id IS NOT NULL
+
                     THEN order_id
 
                 ELSE CONCAT(
@@ -555,9 +727,11 @@ deduplicated AS (
                     '_',
                     ROW_NUMBER
                 )
+
             END
 
         ORDER BY
+
             order_datetime DESC NULLS LAST,
             LOADED_AT DESC,
             SOURCE_FILE DESC,

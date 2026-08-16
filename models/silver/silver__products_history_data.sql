@@ -75,14 +75,13 @@ cleaned AS (
         /*
            HISTORY KEY
 
-           Product + Store + Snapshot Date
-           uniquely identifies the historical
-           inventory position.
+           Product + Snapshot Date
+
+           Store is NOT sourced from Product JSON.
         */
 
         {{ dbt_utils.generate_surrogate_key([
             'product_data:product_id::VARCHAR',
-            'product_data:store_id::VARCHAR',
             'source_snapshot_date'
         ]) }} AS product_history_key,
 
@@ -107,18 +106,6 @@ cleaned AS (
             ),
             ''
         ) AS product_id,
-
-
-        /*
-           STORE ID
-        */
-
-        NULLIF(
-            TRIM(
-                product_data:store_id::VARCHAR
-            ),
-            ''
-        ) AS store_id,
 
 
         /*
@@ -433,7 +420,7 @@ derived AS (
 /*
    4. DEDUPLICATION
 
-   One product/store per snapshot date.
+   One product per snapshot date.
 */
 
 deduplicated AS (
@@ -446,7 +433,6 @@ deduplicated AS (
 
         PARTITION BY
             product_id,
-            store_id,
             source_snapshot_date
 
         ORDER BY
@@ -471,7 +457,6 @@ SELECT
     BATCH_ID,
 
     product_id,
-    store_id,
 
     product_name,
     full_description,
