@@ -38,9 +38,17 @@ models:
     staging:
       bronze:
         +schema: bronze
-
     silver:
       +schema: silver
-
     marts:
       +schema: gold
+    
+  elementary:
+    +schema: elementary
+
+packages:
+  - package: dbt-labs/dbt_utils
+    version: "1.3.0"
+
+  - package: elementary-data/elementary
+    version: "0.25.1"
