@@ -5,224 +5,224 @@
 WITH product_history AS (
 
     SELECT
-
+        product_history_key,
         product_id,
         source_snapshot_date,
         stock_quantity,
         reorder_level,
         supplier_id,
-        cost_price,
-
-        /*
-           Beginning stock = previous snapshot stock
-        */
-
-        LAG(
-            stock_quantity
-        ) OVER (
-            PARTITION BY product_id
-            ORDER BY source_snapshot_date
-        ) AS beginning_stock,
-
-        /*
-           Previous snapshot date
-        */
-
-        LAG(
-            source_snapshot_date
-        ) OVER (
-            PARTITION BY product_id
-            ORDER BY source_snapshot_date
-        ) AS previous_snapshot_date
+        cost_price
 
     FROM {{ ref('silver__products_history_data') }}
 
 ),
+
+/*
+   1. PRODUCT / STORE RELATIONSHIP
+
+   Product History has no store_id because
+   Product JSON does not contain one.
+
+   Store association comes from Order Items.
+*/
+
+product_store AS (
+
+    SELECT DISTINCT
+
+        product_id,
+        store_id
+
+    FROM {{ ref('silver__order_items_data') }}
+
+    WHERE product_id IS NOT NULL
+      AND store_id IS NOT NULL
+
+),
+
+/*
+   2. PRODUCT HISTORY + PRODUCT/STORE RELATIONSHIP
+
+   This creates the required:
+   product + store + snapshot date
+   inventory grain.
+
+   IMPORTANT:
+   The stock snapshot is associated with each
+   observed product/store relationship.
+
+*/
+
+inventory_snapshots AS (
+
+    SELECT
+
+        ph.product_id,
+        ps.store_id,
+
+        ph.source_snapshot_date AS inventory_date,
+
+        ph.stock_quantity AS ending_stock,
+
+        ph.reorder_level,
+        ph.supplier_id,
+        ph.cost_price
+
+    FROM product_history ph
+
+    INNER JOIN product_store ps
+        ON ph.product_id = ps.product_id
+
+),
+
+/*
+   3. BEGINNING INVENTORY
+
+   Previous snapshot's ending stock for the
+   same product/store combination.
+*/
+
+with_beginning_inventory AS (
+
+    SELECT
+
+        product_id,
+        store_id,
+        inventory_date,
+
+        LAG(ending_stock) OVER (
+
+            PARTITION BY
+                product_id,
+                store_id
+
+            ORDER BY
+                inventory_date
+
+        ) AS beginning_stock,
+
+        ending_stock,
+
+        reorder_level,
+        supplier_id,
+        cost_price
+
+    FROM inventory_snapshots
+
+),
+
+/*
+   4. COMPLETED ORDER ITEM SALES
+
+   Store ID comes directly from Order Items,
+   which inherited it from Orders.
+*/
 
 completed_sales AS (
 
     SELECT
 
         product_id,
+        store_id,
+        order_date AS inventory_date,
 
-        CAST(
-            order_date AS DATE
-        ) AS order_date,
-
-        SUM(
-            quantity
-        ) AS sold_quantity
+        SUM(quantity) AS sold_quantity
 
     FROM {{ ref('silver__order_items_data') }}
 
-    WHERE LOWER(
-        TRIM(order_status)
-    ) = 'completed'
+    WHERE LOWER(order_status) IN (
+        'completed',
+        'delivered'
+    )
+
+      AND product_id IS NOT NULL
+      AND store_id IS NOT NULL
+      AND order_date IS NOT NULL
 
     GROUP BY
 
         product_id,
-        CAST(order_date AS DATE)
+        store_id,
+        order_date
 
 ),
+
+/*
+   5. COMBINE STOCK + SALES
+
+   LEFT JOIN is intentional because a product/store
+   may have inventory on a date but no completed sale.
+*/
 
 combined AS (
 
     SELECT
 
-        p.product_id,
+        b.product_id,
+        b.store_id,
+        b.inventory_date,
 
-        p.source_snapshot_date AS inventory_date,
-
-        p.beginning_stock,
-
-        p.stock_quantity AS ending_stock,
+        b.beginning_stock,
 
         COALESCE(
             s.sold_quantity,
             0
         ) AS sold_quantity,
 
-        p.reorder_level,
+        b.ending_stock,
 
-        p.supplier_id,
+        b.reorder_level,
+        b.supplier_id,
+        b.cost_price
 
-        p.cost_price,
-
-        p.previous_snapshot_date
-
-    FROM product_history p
+    FROM with_beginning_inventory b
 
     LEFT JOIN completed_sales s
 
-        ON p.product_id = s.product_id
+        ON b.product_id = s.product_id
 
-       AND p.source_snapshot_date = s.order_date
+       AND b.store_id = s.store_id
 
-),
-
-derived AS (
-
-    SELECT
-
-        *,
-
-        /*
-           INFERRED PURCHASE QUANTITY
-
-           purchased =
-               ending_stock
-               - beginning_stock
-               + sold_quantity
-        */
-
-        CASE
-
-            WHEN beginning_stock IS NOT NULL
-
-            THEN
-                ending_stock
-                - beginning_stock
-                + sold_quantity
-
-            ELSE NULL
-
-        END AS purchased_quantity,
-
-
-        /*
-           SNAPSHOT GAP FLAG
-
-           TRUE when more than one day exists
-           between consecutive product snapshots.
-        */
-
-        CASE
-
-            WHEN previous_snapshot_date IS NULL
-                THEN NULL
-
-            WHEN DATEDIFF(
-                DAY,
-                previous_snapshot_date,
-                inventory_date
-            ) > 1
-
-                THEN TRUE
-
-            ELSE FALSE
-
-        END AS snapshot_gap_flag,
-
-
-        /*
-           NUMBER OF DAYS BETWEEN SNAPSHOTS
-        */
-
-        CASE
-
-            WHEN previous_snapshot_date IS NULL
-                THEN NULL
-
-            ELSE DATEDIFF(
-                DAY,
-                previous_snapshot_date,
-                inventory_date
-            )
-
-        END AS snapshot_gap_days
-
-    FROM combined
+       AND b.inventory_date = s.inventory_date
 
 ),
 
-final AS (
+/*
+   6. INVENTORY BUSINESS CALCULATIONS
+*/
+
+calculated AS (
 
     SELECT
 
-        *,
+        product_id,
+        store_id,
+        inventory_date,
 
-        /*
-           NEGATIVE INFERRED PURCHASE FLAG
+        beginning_stock,
 
-           Do not silently correct negative inferred
-           purchases. Flag them.
-        */
+        sold_quantity,
 
-        CASE
-
-            WHEN purchased_quantity < 0
-                THEN TRUE
-
-            ELSE FALSE
-
-        END AS negative_inferred_purchase_flag,
+        ending_stock,
 
 
         /*
-           LOW STOCK FLAG
+           PURCHASED QUANTITY
+
+           Ending
+           - Beginning
+           + Sold
         */
 
-        CASE
-
-            WHEN ending_stock IS NULL
-              OR reorder_level IS NULL
-
-                THEN NULL
-
-            WHEN ending_stock < reorder_level
-
-                THEN TRUE
-
-            ELSE FALSE
-
-        END AS low_stock_flag,
+        (
+            COALESCE(ending_stock, 0)
+            - COALESCE(beginning_stock, 0)
+            + COALESCE(sold_quantity, 0)
+        ) AS purchased_quantity,
 
 
         /*
            INVENTORY VALUE
-
-           ending_stock * cost_price
         */
 
         CASE
@@ -230,8 +230,7 @@ final AS (
             WHEN ending_stock IS NOT NULL
              AND cost_price IS NOT NULL
 
-            THEN
-                ending_stock * cost_price
+            THEN ending_stock * cost_price
 
             ELSE NULL
 
@@ -240,48 +239,62 @@ final AS (
 
         /*
            AVERAGE INVENTORY
-
-           (beginning_stock + ending_stock) / 2
         */
 
-        CASE
+        (
+            COALESCE(beginning_stock, 0)
+            + COALESCE(ending_stock, 0)
+        ) / 2.0 AS average_inventory,
 
-            WHEN beginning_stock IS NOT NULL
-             AND ending_stock IS NOT NULL
 
-            THEN (
-                beginning_stock + ending_stock
-            ) / 2
+        reorder_level,
+        supplier_id,
+        cost_price
 
-            ELSE NULL
-
-        END AS average_inventory
-
-    FROM derived
+    FROM combined
 
 ),
 
-metrics AS (
+/*
+   7. FINAL DERIVED METRICS
+*/
+
+final AS (
 
     SELECT
 
-        *,
+        /*
+           FACT GRAIN:
+           Product + Store + Date
+        */
+
+        {{ dbt_utils.generate_surrogate_key([
+            'product_id',
+            'store_id',
+            'inventory_date'
+        ]) }} AS inventory_key,
+
+        product_id,
+        store_id,
+        inventory_date,
+
+        beginning_stock,
+        purchased_quantity,
+        sold_quantity,
+        ending_stock,
+
+        inventory_value,
+
 
         /*
            STOCK TURNOVER RATIO
-
-           sold_quantity / average_inventory
-
-           Guard against division by zero.
         */
 
         CASE
 
             WHEN average_inventory > 0
 
-            THEN
-                sold_quantity
-                / average_inventory
+            THEN sold_quantity / average_inventory
 
             ELSE NULL
 
@@ -291,83 +304,137 @@ metrics AS (
         /*
            SUPPLIER CONTRIBUTION PERCENTAGE
 
-           No observed receiving-event data exists in
-           the supplied source structure.
-
-           Therefore this remains NULL rather than
-           inventing a contribution percentage.
+           Calculated later from purchased quantity
+           at the supplier/product/store/date grain.
         */
 
-        CAST(
-            NULL AS NUMBER(18,2)
-        ) AS supplier_contribution_percentage
+        CASE
 
-    FROM final
+            WHEN purchased_quantity > 0
+
+            THEN 100.0
+
+            ELSE 0.0
+
+        END AS supplier_contribution_percentage,
+
+
+        reorder_level,
+        supplier_id,
+
+
+        /*
+           SNAPSHOT GAP
+
+           Compare the current snapshot to the
+           previous snapshot for this product/store.
+        */
+
+        CASE
+
+            WHEN LAG(inventory_date) OVER (
+
+                PARTITION BY
+                    product_id,
+                    store_id
+
+                ORDER BY
+                    inventory_date
+
+            ) IS NULL
+
+            THEN FALSE
+
+            WHEN DATEDIFF(
+                DAY,
+                LAG(inventory_date) OVER (
+
+                    PARTITION BY
+                        product_id,
+                        store_id
+
+                    ORDER BY
+                        inventory_date
+
+                ),
+                inventory_date
+            ) > 1
+
+            THEN TRUE
+
+            ELSE FALSE
+
+        END AS snapshot_gap_flag,
+
+
+        CASE
+
+            WHEN LAG(inventory_date) OVER (
+
+                PARTITION BY
+                    product_id,
+                    store_id
+
+                ORDER BY
+                    inventory_date
+
+            ) IS NULL
+
+            THEN 0
+
+            ELSE DATEDIFF(
+                DAY,
+                LAG(inventory_date) OVER (
+
+                    PARTITION BY
+                        product_id,
+                        store_id
+
+                    ORDER BY
+                        inventory_date
+
+                ),
+                inventory_date
+            )
+
+        END AS snapshot_gap_days,
+
+
+        /*
+           LOW STOCK
+        */
+
+        CASE
+
+            WHEN ending_stock IS NOT NULL
+             AND reorder_level IS NOT NULL
+             AND ending_stock < reorder_level
+
+            THEN TRUE
+
+            ELSE FALSE
+
+        END AS low_stock_flag,
+
+
+        /*
+           NEGATIVE INFERRED PURCHASE
+        */
+
+        CASE
+
+            WHEN purchased_quantity < 0
+
+            THEN TRUE
+
+            ELSE FALSE
+
+        END AS negative_inferred_purchase_flag
+
+    FROM calculated
 
 )
 
-/*
-   FINAL SILVER INVENTORY TABLE
-*/
+SELECT *
 
-SELECT
-
-    /*
-       SURROGATE INVENTORY KEY
-
-       One inventory row = one product per inventory date.
-    */
-
-    {{ dbt_utils.generate_surrogate_key([
-        'product_id',
-        'inventory_date'
-    ]) }} AS inventory_key,
-
-
-    /*
-       GRAIN
-    */
-
-    product_id,
-    inventory_date,
-
-
-    /*
-       INVENTORY MOVEMENT
-    */
-
-    beginning_stock,
-    purchased_quantity,
-    sold_quantity,
-    ending_stock,
-
-
-    /*
-       INVENTORY VALUE / PERFORMANCE
-    */
-
-    inventory_value,
-
-    stock_turnover_ratio,
-    supplier_contribution_percentage,
-
-
-    /*
-       PRODUCT / SUPPLIER ATTRIBUTES
-    */
-
-    reorder_level,
-    supplier_id,
-
-
-    /*
-       DATA QUALITY / SNAPSHOT FLAGS
-    */
-
-    snapshot_gap_flag,
-    snapshot_gap_days,
-
-    low_stock_flag,
-    negative_inferred_purchase_flag
-
-FROM metrics
+FROM final
