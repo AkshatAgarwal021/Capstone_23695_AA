@@ -1,0 +1,57 @@
+{{ config(
+    materialized='view',
+    schema='gold'
+) }}
+
+SELECT
+
+    fi.product_key,
+    dp.product_id,
+    dp.product_name,
+    dp.category,
+    dp.subcategory,
+
+    fi.store_key,
+    ds.store_id,
+    ds.store_name,
+
+    fi.date_key,
+    dd.full_date,
+
+    fi.sold_quantity,
+    fi.beginning_stock,
+    fi.ending_stock,
+
+    fi.stock_turnover_ratio,
+
+    CASE
+
+        WHEN fi.stock_turnover_ratio IS NULL
+            THEN 'No Turnover Data'
+
+        WHEN fi.stock_turnover_ratio = 0
+            THEN 'No Movement'
+
+        WHEN fi.stock_turnover_ratio >= 1
+            THEN 'High Turnover'
+
+        ELSE 'Low Turnover'
+
+    END AS turnover_category
+
+FROM {{ ref('Fact_Inventory') }} fi
+
+LEFT JOIN {{ ref('Dim_Products') }} dp
+
+    ON fi.product_key =
+       dp.product_key
+
+LEFT JOIN {{ ref('Dim_Stores') }} ds
+
+    ON fi.store_key =
+       ds.store_key
+
+LEFT JOIN {{ ref('Dim_date') }} dd
+
+    ON fi.date_key =
+       dd.date_key
