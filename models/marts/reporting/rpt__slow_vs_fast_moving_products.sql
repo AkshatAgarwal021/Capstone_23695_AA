@@ -1,6 +1,5 @@
 {{ config(
-    materialized='view',
-    schema='gold'
+    materialized='view'
 ) }}
 
 WITH product_turnover AS (
