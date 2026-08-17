@@ -5,11 +5,13 @@
 SELECT
 
     fmp.campaign_key,
+
     dmc.campaign_id,
 
-    dmc.target_audience_segment AS campaign_type,
+    dmc.campaign_type,
 
     fmp.date_key,
+
     dd.full_date,
 
     fmp.total_sales_influenced,
