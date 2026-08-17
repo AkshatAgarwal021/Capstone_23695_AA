@@ -1,117 +1,166 @@
 {{ config(materialized="table") }}
 
-with
-    source_data as (
+WITH
+    source_data AS (
 
-        select
+        SELECT
             source_file,
             row_number,
             raw_data,
             loaded_at,
             batch_id
-        from {{ ref("stg_bronze__campaigns_data") }}
+
+        FROM {{ ref("stg_bronze__campaigns_data") }}
 
     ),
 
     /*
-   1. FLATTEN THE CAMPAIGNS ARRAY
-*/
-    flattened as (
+       1. FLATTEN THE CAMPAIGNS ARRAY
+    */
 
-        select
+    flattened AS (
+
+        SELECT
+
             s.source_file,
             s.row_number,
             s.loaded_at,
             s.batch_id,
 
-            campaign.value as campaign_data
+            campaign.value AS campaign_data
 
-        from
+        FROM
             source_data s,
 
-            lateral flatten(
-                input => s.raw_data:campaigns_data
-            ) as campaign
+            LATERAL FLATTEN(
+                INPUT => s.raw_data:campaigns_data
+            ) AS campaign
 
     ),
 
     /*
-   2. EXTRACT + CLEAN + STANDARDIZE
-*/
-    cleaned as (
+       2. EXTRACT + CLEAN + STANDARDIZE
+    */
 
-        select
+    cleaned AS (
+
+        SELECT
 
             /*
-           AUDIT / LINEAGE METADATA
-        */
+               AUDIT / LINEAGE METADATA
+            */
+
             source_file,
             row_number,
             loaded_at,
             batch_id,
 
-            /*
-           CAMPAIGN ID
-        */
-            nullif(
-                trim(campaign_data:campaign_id::varchar),
-                ''
-            ) as campaign_id,
 
             /*
-           CAMPAIGN NAME
-           Trim whitespace
-           Remove unwanted characters
-           Standardize capitalization
-        */
-            initcap(
-                regexp_replace(
-                    trim(campaign_data:campaign_name::varchar),
+               CAMPAIGN ID
+            */
+
+            NULLIF(
+                TRIM(
+                    campaign_data:campaign_id::VARCHAR
+                ),
+                ''
+            ) AS campaign_id,
+
+
+            /*
+               CAMPAIGN NAME
+            */
+
+            INITCAP(
+                REGEXP_REPLACE(
+                    TRIM(
+                        campaign_data:campaign_name::VARCHAR
+                    ),
                     '[^A-Za-z0-9 ''&-]',
                     ''
                 )
-            ) as campaign_name,
+            ) AS campaign_name,
+
 
             /*
-           TARGET AUDIENCE
+               CAMPAIGN TYPE
 
-           Preserve the complete demographic description.
-           Example:
-           "families 18-25" -> "Families 18-25"
-           "suburban"       -> "Suburban"
-        */
-            initcap(
-                regexp_replace(
-                    trim(campaign_data:target_audience::varchar),
+               This is the actual campaign_type
+               provided in the Bronze JSON.
+
+               DO NOT derive this from
+               target_audience_segmentation.
+            */
+
+            INITCAP(
+                REGEXP_REPLACE(
+                    TRIM(
+                        campaign_data:campaign_type::VARCHAR
+                    ),
                     '[^A-Za-z0-9 ''&/-]',
                     ''
                 )
-            ) as target_audience_segmentation,
+            ) AS campaign_type,
+
 
             /*
-           START DATE
-        */
-            try_to_date(
-                nullif(trim(campaign_data:start_date::varchar), '')
-            ) as start_date,
+               TARGET AUDIENCE
+
+               Preserve the complete demographic description.
+            */
+
+            INITCAP(
+                REGEXP_REPLACE(
+                    TRIM(
+                        campaign_data:target_audience::VARCHAR
+                    ),
+                    '[^A-Za-z0-9 ''&/-]',
+                    ''
+                )
+            ) AS target_audience_segmentation,
+
 
             /*
-           END DATE
-        */
-            try_to_date(
-                nullif(trim(campaign_data:end_date::varchar), '')
-            ) as end_date,
+               START DATE
+            */
+
+            TRY_TO_DATE(
+                NULLIF(
+                    TRIM(
+                        campaign_data:start_date::VARCHAR
+                    ),
+                    ''
+                )
+            ) AS start_date,
+
 
             /*
-           BUDGET
-           Parse currency strings.
-           Example:
-           $24,005.75 -> 24005.75
-        */
-            try_to_decimal(
-                nullif(
-                    regexp_replace(
-                        trim(campaign_data:budget::varchar),
+               END DATE
+            */
+
+            TRY_TO_DATE(
+                NULLIF(
+                    TRIM(
+                        campaign_data:end_date::VARCHAR
+                    ),
+                    ''
+                )
+            ) AS end_date,
+
+
+            /*
+               BUDGET
+
+               Parse currency strings.
+            */
+
+            TRY_TO_DECIMAL(
+                NULLIF(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            campaign_data:budget::VARCHAR
+                        ),
                         '[$,]',
                         ''
                     ),
@@ -119,15 +168,19 @@ with
                 ),
                 18,
                 2
-            ) as budget,
+            ) AS budget,
+
 
             /*
-           TOTAL COST
-        */
-            try_to_decimal(
-                nullif(
-                    regexp_replace(
-                        trim(campaign_data:total_cost::varchar),
+               TOTAL COST
+            */
+
+            TRY_TO_DECIMAL(
+                NULLIF(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            campaign_data:total_cost::VARCHAR
+                        ),
                         '[$,]',
                         ''
                     ),
@@ -135,18 +188,19 @@ with
                 ),
                 18,
                 2
-            ) as total_cost,
+            ) AS total_cost,
+
 
             /*
-           TOTAL REVENUE
+               TOTAL REVENUE
+            */
 
-           Normalize to numeric.
-           Not used to calculate final ROI in Silver.
-        */
-            try_to_decimal(
-                nullif(
-                    regexp_replace(
-                        trim(campaign_data:total_revenue::varchar),
+            TRY_TO_DECIMAL(
+                NULLIF(
+                    REGEXP_REPLACE(
+                        TRIM(
+                            campaign_data:total_revenue::VARCHAR
+                        ),
                         '[$,]',
                         ''
                     ),
@@ -154,102 +208,122 @@ with
                 ),
                 18,
                 2
-            ) as total_revenue,
+            ) AS total_revenue,
+
 
             /*
-           ROI CALCULATION
+               ROI CALCULATION
 
-           Cast the source value to numeric.
-           Do not calculate ROI here.
-        */
-            try_to_decimal(
-                nullif(
-                    trim(campaign_data:roi_calculation::varchar),
+               Cast the source value to numeric.
+               Do not calculate ROI here.
+            */
+
+            TRY_TO_DECIMAL(
+                NULLIF(
+                    TRIM(
+                        campaign_data:roi_calculation::VARCHAR
+                    ),
                     ''
                 ),
                 18,
                 4
-            ) as roi_calculation,
+            ) AS roi_calculation,
+
 
             /*
-           LAST MODIFIED DATE
-        */
-            try_to_timestamp_ntz(
-                nullif(
-                    trim(campaign_data:last_modified_date::varchar),
+               LAST MODIFIED DATE
+            */
+
+            TRY_TO_TIMESTAMP_NTZ(
+                NULLIF(
+                    TRIM(
+                        campaign_data:last_modified_date::VARCHAR
+                    ),
                     ''
                 )
-            ) as last_modified_date
+            ) AS last_modified_date
 
-        from flattened
+        FROM flattened
 
     ),
 
     /*
-   3. CAMPAIGN-SPECIFIC DERIVED ATTRIBUTES
-*/
-    derived as (
+       3. CAMPAIGN-SPECIFIC DERIVED ATTRIBUTES
+    */
 
-        select
+    derived AS (
+
+        SELECT
 
             c.*,
 
-            /*
-           CAMPAIGN DURATION
 
-           Number of days between start and end dates.
-        */
-            case
-                when c.start_date is not null
-                     and c.end_date is not null
-                then datediff(
-                    day,
+            /*
+               CAMPAIGN DURATION
+
+               Number of days between start and end dates.
+            */
+
+            CASE
+
+                WHEN c.start_date IS NOT NULL
+                 AND c.end_date IS NOT NULL
+
+                THEN DATEDIFF(
+                    DAY,
                     c.start_date,
                     c.end_date
                 )
-                else null
-            end as campaign_duration_days
 
-        from cleaned c
+                ELSE NULL
+
+            END AS campaign_duration_days
+
+        FROM cleaned c
 
     ),
 
     /*
-   4. DEDUPLICATION
+       4. DEDUPLICATION
 
-   Natural key = campaign_id
+       Natural key = campaign_id
 
-   Keep the most recently modified record.
-*/
-    deduplicated as (
+       Keep the most recently modified record.
+    */
 
-        select *
+    deduplicated AS (
 
-        from derived
+        SELECT *
 
-        qualify
-            row_number() over (
+        FROM derived
 
-                partition by
-                    case
-                        when campaign_id is not null
-                        then campaign_id
+        QUALIFY ROW_NUMBER() OVER (
 
-                        else concat(
-                            '_NULL_',
-                            source_file,
-                            '_',
-                            row_number
-                        )
-                    end
+            PARTITION BY
 
-                order by
-                    last_modified_date desc nulls last,
-                    loaded_at desc,
-                    source_file desc,
-                    row_number desc
+                CASE
 
-            ) = 1
+                    WHEN campaign_id IS NOT NULL
+
+                    THEN campaign_id
+
+                    ELSE CONCAT(
+                        '_NULL_',
+                        source_file,
+                        '_',
+                        row_number
+                    )
+
+                END
+
+            ORDER BY
+
+                last_modified_date DESC NULLS LAST,
+                loaded_at DESC,
+                source_file DESC,
+                row_number DESC
+
+        ) = 1
 
     )
 
@@ -257,6 +331,6 @@ with
    FINAL SILVER CAMPAIGN TABLE
 */
 
-select *
+SELECT *
 
-from deduplicated
+FROM deduplicated

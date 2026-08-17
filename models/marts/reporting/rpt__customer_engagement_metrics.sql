@@ -5,9 +5,10 @@
 SELECT
 
     fmp.campaign_key,
+
     dmc.campaign_id,
 
-    dmc.target_audience_segment AS campaign_type,
+    dmc.campaign_type,
 
     MIN(
         fmp.date_key
@@ -43,5 +44,7 @@ LEFT JOIN {{ ref('Dim_MarketingCampaign') }} dmc
 GROUP BY
 
     fmp.campaign_key,
+
     dmc.campaign_id,
-    dmc.target_audience_segment
+
+    dmc.campaign_type

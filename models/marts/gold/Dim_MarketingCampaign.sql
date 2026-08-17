@@ -8,6 +8,7 @@ WITH campaigns AS (
 
         campaign_id,
         campaign_name,
+        campaign_type,
         target_audience_segmentation,
         budget,
         campaign_duration_days,
@@ -47,6 +48,18 @@ final AS (
         */
 
         campaign_name,
+
+
+        /*
+           CAMPAIGN TYPE
+
+           Actual campaign type supplied by
+           the source JSON.
+
+           This is NOT the target audience.
+        */
+
+        campaign_type,
 
 
         /*

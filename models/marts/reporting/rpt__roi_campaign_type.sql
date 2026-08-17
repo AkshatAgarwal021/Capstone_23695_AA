@@ -4,9 +4,7 @@
 
 SELECT
 
-    dmc.campaign_id,
-
-    dmc.campaign_name,
+    dmc.campaign_type,
 
     COUNT(
         DISTINCT fmp.campaign_key
@@ -59,5 +57,4 @@ LEFT JOIN {{ ref('Dim_MarketingCampaign') }} dmc
 
 GROUP BY
 
-    dmc.campaign_id,
-    dmc.campaign_name
+    dmc.campaign_type
