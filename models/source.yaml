@@ -6,9 +6,10 @@ sources:
     schema: EXTERNAL
     loaded_at_field: FILE_LAST_MODIFIED
 
-    freshness:
-      warn_after: {count: 1, period: day}
-      error_after: {count: 200, period: day}
+    config:
+      freshness:
+        warn_after: {count: 1, period: day}
+        error_after: {count: 200, period: day}
 
     tables:
 

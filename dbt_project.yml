@@ -1,6 +1,7 @@
 # Name your project! Project names should contain only lowercase characters
 # and underscores. A good package name should reflect your organization's
-# name or the intended use of these models
+# name or the intended use of these models.
+
 name: 'Capstone_23695_AA'
 version: '1.0.0'
 config-version: 2
@@ -8,7 +9,7 @@ config-version: 2
 # This setting configures which "profile" dbt uses for this project.
 profile: 'default'
 
-# These configurations specify where dbt should look for different types of files.
+# Project paths
 model-paths: ["models"]
 analysis-paths: ["analyses"]
 test-paths: ["tests"]
@@ -31,10 +32,9 @@ models:
 
   Capstone_23695_AA:
 
-    # ========================================================
-    # BRONZE
-    # models/staging/bronze/
-    # ========================================================
+    # --------------------------------------------------------
+    # BRONZE / STAGING
+    # --------------------------------------------------------
 
     staging:
 
@@ -42,38 +42,34 @@ models:
         +schema: "{{ env_var('DBT_BRONZE_SCHEMA') }}"
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # SILVER
-    # models/silver/
-    # ========================================================
+    # --------------------------------------------------------
 
     silver:
       +schema: "{{ env_var('DBT_SILVER_SCHEMA') }}"
 
 
-    # ========================================================
-    # GOLD / MARTS
-    # models/marts/gold/
-    # ========================================================
+    # --------------------------------------------------------
+    # GOLD
+    #
+    # Everything inside marts belongs to GOLD.
+    #
+    # This includes:
+    #   - Dimensions
+    #   - Facts
+    #   - Reporting views
+    #
+    # Therefore there is NO separate reporting schema.
+    # --------------------------------------------------------
 
     marts:
-
-      gold:
-        +schema: "{{ env_var('DBT_GOLD_SCHEMA') }}"
+      +schema: "{{ env_var('DBT_GOLD_SCHEMA') }}"
 
 
-      # ======================================================
-      # REPORTING
-      # models/marts/reporting/
-      # ======================================================
-
-      reporting:
-        +schema: "{{ env_var('DBT_REPORTING') }}"
-
-
-  # ==========================================================
+  # ----------------------------------------------------------
   # ELEMENTARY
-  # ==========================================================
+  # ----------------------------------------------------------
 
   elementary:
     +schema: elementary
