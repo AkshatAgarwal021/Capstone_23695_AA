@@ -7,6 +7,7 @@ WITH campaigns AS (
     SELECT
 
         campaign_id,
+        campaign_name,
         target_audience_segmentation,
         budget,
         campaign_duration_days,
@@ -42,6 +43,13 @@ final AS (
 
 
         /*
+           CAMPAIGN NAME
+        */
+
+        campaign_name,
+
+
+        /*
            TARGET AUDIENCE
         */
 
@@ -58,8 +66,6 @@ final AS (
 
         /*
            CAMPAIGN DURATION
-
-           Number of days between start and end dates.
         */
 
         campaign_duration_days
@@ -68,13 +74,6 @@ final AS (
 
         /*
            SOURCE ROI
-
-           This is the normalized source
-           roi_calculation from Silver.
-
-           Final ROI based on attributed sales
-           is calculated and validated in the
-           Gold Marketing Performance fact.
         */
 
         roi_calculation

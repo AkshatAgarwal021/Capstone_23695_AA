@@ -1,6 +1,5 @@
 {{ config(
-    materialized='view',
-    schema='gold'
+    materialized='view'
 ) }}
 
 WITH supplier_purchase AS (

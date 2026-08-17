@@ -1,11 +1,12 @@
 {{ config(
-    materialized='view',
-    schema='gold'
+    materialized='view'
 ) }}
 
 SELECT
 
-    dmc.target_audience_segment AS campaign_type,
+    dmc.campaign_id,
+
+    dmc.campaign_name,
 
     COUNT(
         DISTINCT fmp.campaign_key
@@ -58,4 +59,5 @@ LEFT JOIN {{ ref('Dim_MarketingCampaign') }} dmc
 
 GROUP BY
 
-    dmc.target_audience_segment
+    dmc.campaign_id,
+    dmc.campaign_name
